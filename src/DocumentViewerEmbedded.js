@@ -30,7 +30,8 @@ export default class DocumentViewerEmbedded {
     }
 
     this.listeners = {};
-    this.onChangePageNumber = options.onChangePageNumber || ((pageNumber) => {});
+    this.onChangePageNumber =
+      options.onChangePageNumber || ((pageNumber) => {});
 
     // DOM elements
     this.toolbarContainer = DocumentViewerEmbedded.createElement("div", {
@@ -105,11 +106,19 @@ export default class DocumentViewerEmbedded {
   }
 
   setHighlightRanges(ranges) {
+    if (JSON.stringify(ranges) === JSON.stringify(this.highlightRanges)) {
+      return;
+    }
     this.highlightRanges = [...ranges];
+    // repaint text layers for pages that are active
     for (const page of this.pages) {
       if (page.active) {
         page.repaintTextLayer();
       }
+    }
+    // jump to location of first highlight range
+    if (this.highlightRanges.length > 0) {
+      this.jumpToLocation(this.highlightRanges[0].start);
     }
   }
 
@@ -121,7 +130,7 @@ export default class DocumentViewerEmbedded {
     if (options.pageNumber && options.pageNumber !== this.pageNumber) {
       this.setPageNumber(options.pageNumber, true);
     }
-    if (options.highlightRanges) {
+    if (Array.isArray(options.highlightRanges)) {
       this.setHighlightRanges(options.highlightRanges);
     }
   }
@@ -242,7 +251,7 @@ export default class DocumentViewerEmbedded {
   // set current page and scroll page into view
   setPageNumber(pageNumber, scrollIntoView = true) {
     if (this.pageNumber === pageNumber && scrollIntoView === false) {
-      return; 
+      return;
     }
     this.pageNumber = pageNumber;
     this.onChangePageNumber(pageNumber);
@@ -390,8 +399,14 @@ export default class DocumentViewerEmbedded {
 
   jumpToLocation(charIndex) {
     const pageNumber = this.getPageNumber(charIndex);
+    console.log(`jumpToLocation`, charIndex, pageNumber);
+    if (pageNumber < 1 || pageNumber > this.pages.length) {
+      console.warn(`Invalid pageNumber`, pageNumber);
+      return;
+    }
     const page = this.pages[pageNumber - 1];
     if (page.layoutLoaded) {
+      this.setPageNumber(pageNumber, true);
     } else {
       this.setPageNumber(pageNumber, true);
     }
@@ -712,8 +727,8 @@ class DocumentViewerEmbeddedPage {
             let highlightStyle = {};
             if (this.viewer.shouldHighlight(word.span[0])) {
               highlightStyle = {
-                backgroundColor: "#ff0",
-                outline: "4px solid #ff0",
+                backgroundColor: "#fea",
+                outline: "4px solid #fea",
                 mixBlendMode: "darken",
               };
             }
