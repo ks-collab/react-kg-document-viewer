@@ -11,7 +11,7 @@ export default class DocumentViewerEmbedded {
     this.prefetchPages = 2; // prefetch this many pages in forward and backward directions
     this.offsetHeight = 0;
     this.lastScrollUpdate = performance.now();
-    this.scrollUpdateInterval = 200; // compute scroll updates at 5 fps
+    this.scrollUpdateInterval = 100; // msec
 
     // mouse event info
     this.dragging = false;
@@ -22,14 +22,31 @@ export default class DocumentViewerEmbedded {
     this.drawLineOverlay = false;
     this.drawBlockOverlay = true;
 
+    this.pages = [];
+
     this.highlightRanges = [];
+    if (options.highlightRanges && options.highlightRanges.length > 0) {
+      this.setHighlightRanges(options.highlightRanges);
+    }
 
     this.listeners = {};
+    this.onChangePageNumber = options.onChangePageNumber || ((pageNumber) => {});
 
     // DOM elements
     this.toolbarContainer = DocumentViewerEmbedded.createElement("div", {
       className: "toolbarContainer",
-      parent: this.container
+      parent: this.container,
+      style: {
+        position: "relative",
+        height: "28px",
+        lineHeight: "28px",
+        background: "#fafafa",
+        borderBottom: "1px solid #eee",
+        overflow: "hidden",
+        fontSize: "12px",
+        zIndex: "100",
+        boxShadow: "0 5px 15px -10px rgba(0,0,0,0.25)",
+      },
     });
     this.documentContainer = DocumentViewerEmbedded.createElement("div", {
       className: "documentContainer",
@@ -49,14 +66,15 @@ export default class DocumentViewerEmbedded {
         },
         resize: (event) => {
           this.resizeHandler(event);
-        }
+        },
       },
       style: {
         position: "relative",
-        height: "100%",
-        background: "#aaa",
-        overflowY: "auto"
-      }
+        height: "calc(100% - 30px)",
+        background: "#fff",
+        overflowY: "auto",
+        transition: "background 0.5s",
+      },
     });
     this.pagesContainer = DocumentViewerEmbedded.createElement("div", {
       className: "pagesContainer",
@@ -65,8 +83,10 @@ export default class DocumentViewerEmbedded {
         width: "60rem",
         maxWidth: "calc(100% - 2rem)",
         position: "relative",
-        margin: "1rem auto"
-      }
+        margin: "1rem auto",
+        opacity: "0",
+        transition: "opacity 0.25s",
+      },
     });
     this.dragOverlay = DocumentViewerEmbedded.createElement("div", {
       clasName: "dragOverlay",
@@ -78,21 +98,33 @@ export default class DocumentViewerEmbedded {
         border: "1px solid rgba(0,190,255,0.4)",
         transition: "opacity 0.25s",
         pointerEvents: "none",
-        whiteSpace: "pre"
-      }
+        whiteSpace: "pre",
+      },
     });
     this.setDocumentId(options.documentId);
   }
 
   setHighlightRanges(ranges) {
     this.highlightRanges = [...ranges];
+    for (const page of this.pages) {
+      if (page.active) {
+        page.repaintTextLayer();
+      }
+    }
   }
 
   detach() {
     // called by componentWillUnmount
   }
 
-  update(options) {}
+  update(options) {
+    if (options.pageNumber && options.pageNumber !== this.pageNumber) {
+      this.setPageNumber(options.pageNumber, true);
+    }
+    if (options.highlightRanges) {
+      this.setHighlightRanges(options.highlightRanges);
+    }
+  }
 
   on(event, listener) {
     // attach external event listeners
@@ -104,19 +136,56 @@ export default class DocumentViewerEmbedded {
     Promise.all([
       fetch(`${this.baseURL}/api/document/${documentId}`, {
         method: "GET",
-        headers: this.headers
+        headers: this.headers,
       }),
       fetch(`${this.baseURL}/api/document/${documentId}/layout`, {
         method: "GET",
-        headers: this.headers
-      })
+        headers: this.headers,
+      }),
     ]).then(async (responses) => {
       this.document = await responses[0].json();
       this.layout = await responses[1].json();
+      this.createToolbar();
       this.createPages();
-      this.setPageNumber(this.pageNumber);
+      this.pagesContainer.style.opacity = 1;
+      window.setTimeout(() => {
+        this.documentContainer.style.backgroundColor = "#aaa";
+      }, 125);
+      this.setPageNumber(this.pageNumber, true);
       this.scrollHandler();
     });
+  }
+
+  createToolbar() {
+    this.toolbarTitle = DocumentViewerEmbedded.createElement("div", {
+      className: "documentTitle",
+      parent: this.toolbarContainer,
+      textContent: this.document.meta.title || this.document.filename,
+      style: {
+        width: "100%",
+        textAlign: "center",
+        fontWeight: "bold",
+      },
+    });
+    this.toolbarPageContainer = DocumentViewerEmbedded.createElement("div", {
+      className: "documentPageCount",
+      parent: this.toolbarContainer,
+      style: {
+        padding: "0 6px",
+        position: "absolute",
+        top: "0",
+        right: "0",
+      },
+    });
+    this.toolbarPageLabel = DocumentViewerEmbedded.createElement("span", {
+      className: "documentPageCount",
+      parent: this.toolbarPageContainer,
+    });
+    this.updateToolbarPageNumber();
+  }
+
+  updateToolbarPageNumber() {
+    this.toolbarPageLabel.textContent = `${this.pageNumber} / ${this.layout.length}`;
   }
 
   createPages() {
@@ -130,7 +199,7 @@ export default class DocumentViewerEmbedded {
   }
 
   // Sets current page to that which has the greatest overlap amount
-  scrollHandler(forceUpdate = false) {
+  scrollHandler() {
     const elapsed = performance.now() - this.lastScrollUpdate; // in ms
     if (elapsed < this.scrollUpdateInterval) {
       return;
@@ -145,14 +214,14 @@ export default class DocumentViewerEmbedded {
     };
     const viewportLimits = {
       min: this.documentContainer.scrollTop,
-      max: this.documentContainer.scrollTop + 2 * this.offsetHeight
+      max: this.documentContainer.scrollTop + this.offsetHeight,
     };
 
     let offsetTop = 0;
     for (const page of this.pages) {
       const pageLimits = {
         min: offsetTop,
-        max: offsetTop + page.offsetHeight
+        max: offsetTop + page.offsetHeight,
       };
       offsetTop += page.offsetHeight;
       let overlap = calculateOverlap(viewportLimits, pageLimits);
@@ -172,7 +241,11 @@ export default class DocumentViewerEmbedded {
 
   // set current page and scroll page into view
   setPageNumber(pageNumber, scrollIntoView = true) {
+    if (this.pageNumber === pageNumber && scrollIntoView === false) {
+      return; 
+    }
     this.pageNumber = pageNumber;
+    this.onChangePageNumber(pageNumber);
     for (let i = 1; i <= this.pages.length; i++) {
       if (
         this.pageNumber - this.prefetchPages <= i &&
@@ -186,6 +259,7 @@ export default class DocumentViewerEmbedded {
     if (scrollIntoView) {
       this.pages[pageNumber - 1].container.scrollIntoView();
     }
+    this.updateToolbarPageNumber();
   }
 
   resizeHandler(event) {
@@ -211,7 +285,7 @@ export default class DocumentViewerEmbedded {
           return {
             pageNumber: parseInt(element.dataset.pageNumber, 10),
             pageX: mouseEvent.clientX - element.getBoundingClientRect().left,
-            pageY: mouseEvent.clientY - element.getBoundingClientRect().top
+            pageY: mouseEvent.clientY - element.getBoundingClientRect().top,
           };
         }
       }
@@ -276,7 +350,7 @@ export default class DocumentViewerEmbedded {
       ].container.getBoundingClientRect();
       return {
         x: pageRect.left - containerRect.left + pageX,
-        y: pageRect.top - containerRect.top + pageY
+        y: pageRect.top - containerRect.top + pageY,
       };
     };
     let a = pageCoordToContainerCoord(
@@ -291,11 +365,11 @@ export default class DocumentViewerEmbedded {
     );
     let startCoord = {
       x: Math.min(a.x, b.x),
-      y: Math.min(a.y, b.y)
+      y: Math.min(a.y, b.y),
     };
     let endCoord = {
       x: Math.max(a.x, b.x),
-      y: Math.max(a.y, b.y)
+      y: Math.max(a.y, b.y),
     };
     this.dragOverlay.style.top =
       this.documentContainer.scrollTop + startCoord.y + "px";
@@ -321,6 +395,16 @@ export default class DocumentViewerEmbedded {
     } else {
       this.setPageNumber(pageNumber, true);
     }
+  }
+
+  shouldHighlight(index) {
+    for (let i = 0; i < this.highlightRanges.length; i++) {
+      const range = this.highlightRanges[i];
+      if (range.start <= index && index <= range.end) {
+        return true;
+      }
+    }
+    return;
   }
 
   /*
@@ -386,6 +470,7 @@ class DocumentViewerEmbeddedPage {
     this.span = pageLayout.span;
     this.lines = pageLayout.line;
 
+    this.active = false;
     this.loading = false;
     this.imageLoaded = false;
     this.layoutLoaded = false;
@@ -403,11 +488,11 @@ class DocumentViewerEmbeddedPage {
         backgroundColor: "#fff",
         width: "100%",
         borderTop: "1px solid #eee",
-        overflow: "hidden"
+        overflow: "hidden",
       },
       dataset: {
-        pageNumber: this.pageNumber
-      }
+        pageNumber: this.pageNumber,
+      },
     });
     this.offsetHeight = this.container.offsetHeight;
 
@@ -420,12 +505,13 @@ class DocumentViewerEmbeddedPage {
         height: "100%",
         position: "absolute",
         left: "0",
-        right: "0"
-      }
+        right: "0",
+      },
     });
   }
 
   unload() {
+    this.active = false;
     if (this.textLayerRendered) {
       this.blockOverlays = [];
       this.lineOverlays = [];
@@ -435,8 +521,18 @@ class DocumentViewerEmbeddedPage {
     }
   }
 
+  repaintTextLayer() {
+    if (this.textLayer) {
+      this.textLayer.remove();
+    }
+    this.textLayerRendered = false;
+    this.load();
+  }
+
   // this is called when the page enters the viewport and loads page layout and image asynchronously
   load() {
+    this.active = true;
+
     if (this.loading) {
       return;
     }
@@ -463,7 +559,7 @@ class DocumentViewerEmbeddedPage {
         position: "absolute",
         top: "0",
         left: "0",
-        width: "100%"
+        width: "100%",
       },
       attributes: { draggable: false },
       eventListeners: {
@@ -473,8 +569,8 @@ class DocumentViewerEmbeddedPage {
           if (this.imageLoaded && this.layoutLoaded) {
             this.loading = false;
           }
-        }
-      }
+        },
+      },
     });
     this.image.src = `${this.viewer.baseURL}/api/document/${this.viewer.documentId}/page/${this.pageNumber}/image`;
 
@@ -488,31 +584,31 @@ class DocumentViewerEmbeddedPage {
           width: data[0],
           height: data[1],
           span: data[3],
-          blocks: []
+          blocks: [],
         };
         const convertBbox = (arr) => ({
           x1: arr[0],
           y1: arr[1],
           x2: arr[2],
-          y2: arr[3]
+          y2: arr[3],
         });
         data[2].forEach((blockArr, blockIndex) => {
           const block = {
             bbox: convertBbox(blockArr[0]),
             lines: [],
-            span: blockArr[2]
+            span: blockArr[2],
           };
           blockArr[1].forEach((lineArr, lineIndex) => {
             const line = {
               bbox: convertBbox(lineArr[0]),
               words: [],
-              span: lineArr[2]
+              span: lineArr[2],
             };
             lineArr[1].forEach((wordArr, wordIndex) => {
               line.words.push({
                 bbox: convertBbox(wordArr[0]),
                 text: wordArr[1],
-                span: wordArr[2]
+                span: wordArr[2],
               });
             });
             block.lines.push(line);
@@ -546,8 +642,8 @@ class DocumentViewerEmbeddedPage {
         top: "0",
         left: "0",
         width: "100%",
-        height: "100%"
-      }
+        height: "100%",
+      },
     });
     for (const [blockIndex, block] of this.layout.blocks.entries()) {
       if (this.viewer.drawBlockOverlay) {
@@ -563,13 +659,14 @@ class DocumentViewerEmbeddedPage {
             width:
               ((block.bbox.x2 - block.bbox.x1) / this.layout.width) * 100 + "%",
             height:
-              ((block.bbox.y2 - block.bbox.y1) / this.layout.height) * 100 + "%"
+              ((block.bbox.y2 - block.bbox.y1) / this.layout.height) * 100 +
+              "%",
           },
           dataset: {
             index: blockIndex,
             start: block.span[0],
-            end: block.span[1]
-          }
+            end: block.span[1],
+          },
         });
         this.blockOverlays.push(blockOverlay);
       }
@@ -587,40 +684,49 @@ class DocumentViewerEmbeddedPage {
               width:
                 ((line.bbox.x2 - line.bbox.x1) / this.layout.width) * 100 + "%",
               height:
-                ((line.bbox.y2 - line.bbox.y1) / this.layout.height) * 100 + "%"
+                ((line.bbox.y2 - line.bbox.y1) / this.layout.height) * 100 +
+                "%",
             },
             dataset: {
               index: lineIndex,
               start: line.span[0],
-              end: line.span[1]
-            }
+              end: line.span[1],
+            },
           });
           this.lineOverlays.push(lineOverlay);
         }
         for (const [wordIndex, word] of line.words.entries()) {
           if (this.viewer.drawWordOverlay) {
+            const baseStyle = {
+              position: "absolute",
+              pointerEvents: "none",
+              zIndex: 100,
+              left: (word.bbox.x1 / this.layout.width) * 100 + "%",
+              top: (word.bbox.y1 / this.layout.height) * 100 + "%",
+              width:
+                ((word.bbox.x2 - word.bbox.x1) / this.layout.width) * 100 + "%",
+              height:
+                ((word.bbox.y2 - word.bbox.y1) / this.layout.height) * 100 +
+                "%",
+            };
+            let highlightStyle = {};
+            if (this.viewer.shouldHighlight(word.span[0])) {
+              highlightStyle = {
+                backgroundColor: "#ff0",
+                outline: "4px solid #ff0",
+                mixBlendMode: "darken",
+              };
+            }
             const wordOverlay = DocumentViewerEmbedded.createElement("div", {
               parent: textLayer,
               className: "wordOverlay",
-              style: {
-                position: "absolute",
-                pointerEvents: "none",
-                zIndex: 100,
-                left: (word.bbox.x1 / this.layout.width) * 100 + "%",
-                top: (word.bbox.y1 / this.layout.height) * 100 + "%",
-                width:
-                  ((word.bbox.x2 - word.bbox.x1) / this.layout.width) * 100 +
-                  "%",
-                height:
-                  ((word.bbox.y2 - word.bbox.y1) / this.layout.height) * 100 +
-                  "%"
-              },
+              style: { ...baseStyle, ...highlightStyle },
               dataset: {
                 index: wordIndex,
                 text: word.text,
                 start: word.span[0],
-                end: word.span[1]
-              }
+                end: word.span[1],
+              },
             });
             this.wordOverlays.push(wordOverlay);
           }

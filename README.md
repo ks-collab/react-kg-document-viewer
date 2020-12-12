@@ -1,21 +1,26 @@
 ## Usage
 
-See example on [codesandbox.io](https://codesandbox.io/s/frosty-mendel-77zx6?file=/src/App.js)
+See interactive example on [codesandbox.io](https://codesandbox.io/s/frosty-mendel-77zx6?file=/src/App.js)
 
-**App.js**
 ```javascript
-import React from "react";
+import React, {useState} from "react";
 
 import DocumentViewerReact from "react-kg-document-viewer";
 
 const App = (props) => {
+  const [pageNumber, setPageNumber] = useState(1);
+  const [highlightRanges, setHighlightRanges] = useState([]);
   let options = {
     headers: {
-      Authorization: `Bearer ${props.token}`
+      Authorization: `Bearer ${props.token}`,
     },
     baseURL: props.baseURL,
-    documentId: 1,
-    pageNumber: 1
+    documentId: props.documentId || 1,
+    pageNumber: pageNumber,
+    highlightRanges: highlightRanges, // array of {start: 1, end: 5}
+    onChangePageNumber: (pageNumber_) => { // allow viewer to update pageNumber
+      setPageNumber(pageNumber_);
+    }
   };
   return (
     <div className="App">
